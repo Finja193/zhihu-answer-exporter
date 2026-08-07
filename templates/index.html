@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zhihu Answer Scraper</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .header h1 { font-size: 24px; color: #1a1a2e; margin-bottom: 8px; }
+        .header p { font-size: 14px; color: #888; }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .card h2 { font-size: 16px; margin-bottom: 16px; color: #1a1a2e; }
+        .input-group { display: flex; gap: 10px; }
+        .input-group input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .input-group input:focus { border-color: #0066ff; }
+        .btn {
+            padding: 10px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: #0066ff; color: #fff; }
+        .btn-primary:hover { background: #0052cc; }
+        .btn-primary:disabled { background: #a0c4ff; cursor: not-allowed; }
+        .btn-outline { background: #fff; color: #0066ff; border: 1px solid #0066ff; }
+        .btn-outline:hover { background: #f0f5ff; }
+
+        .status-area { min-height: 60px; }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 0;
+            font-size: 14px;
+        }
+        .status-icon {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .status-icon.pending { background: #f0f0f0; color: #999; }
+        .status-icon.running { background: #e6f0ff; color: #0066ff; }
+        .status-icon.done { background: #e6ffe6; color: #00a854; }
+        .status-icon.error { background: #ffe6e6; color: #f5222d; }
+
+        .progress-section { margin-top: 12px; }
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+        .progress-bar {
+            height: 8px;
+            background: #e8e8e8;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #0066ff, #00c6ff);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .log-area {
+            background: #1a1a2e;
+            color: #a0ffa0;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+        .log-area .log-error { color: #ff6b6b; }
+        .log-area .log-warn { color: #ffd93d; }
+
+        .hidden { display: none; }
+        .spinner {
+            display: inline-block;
+            width: 16px; height: 16px;
+            border: 2px solid #ddd;
+            border-top-color: #0066ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .result-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 0;
+            font-size: 14px;
+        }
+        .result-row .label { color: #888; }
+        .result-row .value { font-weight: 600; color: #1a1a2e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Zhihu Answer Scraper</h1>
+            <p>Get all answers posted after 2024-01-01</p>
+        </div>
+
+        <div class="card" id="inputCard">
+            <h2>Enter Question URL</h2>
+            <div class="input-group">
+                <input type="text" id="questionUrl"
+                       placeholder="https://www.zhihu.com/question/12345678 or just the ID"
+                       autocomplete="off">
+                <button class="btn btn-primary" id="startBtn" onclick="startScrape()">Start</button>
+            </div>
+        </div>
+
+        <div class="card hidden" id="progressCard">
+            <h2>Progress</h2>
+            <div class="status-area" id="statusArea"></div>
+            <div class="progress-section hidden" id="fetchSection">
+                <div class="progress-header">
+                    <span>Fetching answers</span>
+                    <span id="fetchCount">0 answers</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="fetchBar"></div>
+                </div>
+            </div>
+            <div class="log-area hidden" id="logArea"></div>
+        </div>
+
+        <div class="card hidden" id="resultCard">
+            <h2>Result</h2>
+            <div id="resultContent"></div>
+        </div>
+    </div>
+
+    <script>
+        let taskId = null;
+        let eventSource = null;
+
+        async function startScrape() {
+            const url = document.getElementById('questionUrl').value.trim();
+            if (!url) return;
+
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('startBtn').textContent = 'Running...';
+            document.getElementById('progressCard').classList.remove('hidden');
+            document.getElementById('resultCard').classList.add('hidden');
+            document.getElementById('resultContent').innerHTML = '';
+            document.getElementById('fetchSection').classList.add('hidden');
+            document.getElementById('logArea').classList.add('hidden');
+            document.getElementById('logArea').innerHTML = '';
+            document.getElementById('statusArea').innerHTML = '';
+
+            try {
+                const resp = await fetch('/api/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question_url: url })
+                });
+                const data = await resp.json();
+                if (data.error) { showError(data.error); return; }
+                taskId = data.task_id;
+                connectSSE(taskId);
+            } catch (e) {
+                showError('Failed to start: ' + e.message);
+            }
+        }
+
+        function connectSSE(taskId) {
+            if (eventSource) eventSource.close();
+            eventSource = new EventSource('/api/progress/' + taskId);
+
+            eventSource.addEventListener('phase', e => updatePhase(JSON.parse(e.data)));
+            eventSource.addEventListener('login_status', e => updateLoginStatus(JSON.parse(e.data)));
+            eventSource.addEventListener('fetch_progress', e => updateFetchProgress(JSON.parse(e.data)));
+            eventSource.addEventListener('done', e => showDone(JSON.parse(e.data)));
+            eventSource.addEventListener('error', e => {
+                try { showError(JSON.parse(e.data).message); } catch (_) {}
+            });
+            eventSource.onerror = () => eventSource.close();
+        }
+
+        function setStatus(id, icon, text) {
+            const area = document.getElementById('statusArea');
+            let el = document.getElementById(id);
+            if (!el) {
+                el = document.createElement('div');
+                el.id = id;
+                el.className = 'status-item';
+                area.appendChild(el);
+            }
+            el.innerHTML = `<span class="status-icon ${icon}">${icon === 'done' ? '\u2713' : icon === 'running' ? '<span class="spinner"></span>' : icon === 'error' ? '\u2717' : '\u25cb'}</span><span>${text}</span>`;
+        }
+
+        function updateLoginStatus(data) {
+            if (data.done) {
+                setStatus('status-login', 'done', data.cached ? 'Login cached' : data.message);
+            } else {
+                setStatus('status-login', 'running', data.message);
+            }
+        }
+
+        function updatePhase(data) {
+            if (data.phase === 'scanning') {
+                setStatus('status-fetch', 'running', data.message);
+                document.getElementById('fetchSection').classList.remove('hidden');
+            }
+        }
+
+        function updateFetchProgress(data) {
+            document.getElementById('fetchCount').textContent = data.current + ' answers';
+            document.getElementById('fetchSection').classList.remove('hidden');
+            document.getElementById('logArea').classList.remove('hidden');
+            addLog('Got ' + data.current + ' answers (latest: ' + data.author + ')');
+        }
+
+        function showDone(data) {
+            setStatus('status-fetch', 'done', 'Complete!');
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').textContent = 'Start';
+            document.getElementById('fetchBar').style.width = '100%';
+            document.getElementById('resultCard').classList.remove('hidden');
+            document.getElementById('resultContent').innerHTML =
+                '<div class="result-row"><span class="label">Total answers</span><span class="value">' + data.total + '</span></div>' +
+                '<div class="result-row"><span class="label">Saved to</span><span class="value" style="font-size:12px;">' + data.json_path + '</span></div>';
+            addLog('[DONE] ' + data.message);
+            eventSource.close();
+        }
+
+        function showError(msg) {
+            setStatus('status-err', 'error', msg);
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('startBtn').textContent = 'Retry';
+            addLog('[ERROR] ' + msg, 'log-error');
+            if (eventSource) eventSource.close();
+        }
+
+        function addLog(msg, cls) {
+            const log = document.getElementById('logArea');
+            log.innerHTML += '<div class="' + (cls || '') + '">[' + new Date().toLocaleTimeString() + '] ' + msg + '</div>';
+            log.scrollTop = log.scrollHeight;
+        }
+
+        fetch('/api/check_login')
+            .then(r => r.json())
+            .then(data => { if (data.logged_in) addLog('Already logged in as: ' + data.username); })
+            .catch(() => {});
+    </script>
+</body>
+</html>
