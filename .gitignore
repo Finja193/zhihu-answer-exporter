@@ -1,0 +1,27 @@
+# 登录凭据，切勿入库
+zhihu_cookies.json
+
+# 抓取结果（体积大且可再生）
+output/
+*.csv
+*_report.json
+logs/
+*.log
+*.err
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 打包产物
+build/
+dist/
+*.spec.bak
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store

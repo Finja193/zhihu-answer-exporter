@@ -135,6 +135,32 @@
         }
         .result-row .label { color: #888; }
         .result-row .value { font-weight: 600; color: #1a1a2e; }
+
+        .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+        .tab {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: #fff;
+            color: #666;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+        }
+        .tab.active { border-color: #0066ff; color: #0066ff; background: #f0f5ff; font-weight: 600; }
+        .field-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; color: #666; }
+        .field-row input {
+            width: 110px;
+            padding: 8px 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+        }
+        .field-row input:focus { border-color: #0066ff; }
+        .hint { font-size: 12px; color: #999; margin-top: 8px; line-height: 1.5; }
     </style>
 </head>
 <body>
@@ -145,12 +171,24 @@
         </div>
 
         <div class="card" id="inputCard">
-            <h2>Enter Question URL</h2>
+            <div class="tabs">
+                <div class="tab active" id="tabQuestion" onclick="setMode('question')">By Question</div>
+                <div class="tab" id="tabTopic" onclick="setMode('topic')">By Topic (CSV)</div>
+            </div>
+            <h2 id="inputTitle">Enter Question URL</h2>
             <div class="input-group">
                 <input type="text" id="questionUrl"
                        placeholder="https://www.zhihu.com/question/12345678 or just the ID"
                        autocomplete="off">
                 <button class="btn btn-primary" id="startBtn" onclick="startScrape()">Start</button>
+            </div>
+            <div class="field-row hidden" id="targetRow">
+                <span>Answers to fetch</span>
+                <input type="number" id="targetCount" value="2000" min="1" max="20000">
+            </div>
+            <div class="hint hidden" id="topicHint">
+                Export fields: blogger, blogger auth, answerer, answerer auth, question title,
+                publish time, content, topic tags, upvotes, comments, favorites, likes. CSV / UTF-8.
             </div>
         </div>
 
@@ -178,10 +216,26 @@
     <script>
         let taskId = null;
         let eventSource = null;
+        let mode = 'question';
+
+        const TOPIC_PLACEHOLDER = 'https://www.zhihu.com/topic/19553148/top-answers or just the ID';
+        const QUESTION_PLACEHOLDER = 'https://www.zhihu.com/question/12345678 or just the ID';
+
+        function setMode(next) {
+            mode = next;
+            document.getElementById('tabQuestion').classList.toggle('active', next === 'question');
+            document.getElementById('tabTopic').classList.toggle('active', next === 'topic');
+            document.getElementById('inputTitle').textContent =
+                next === 'topic' ? 'Enter Topic URL' : 'Enter Question URL';
+            document.getElementById('questionUrl').placeholder =
+                next === 'topic' ? TOPIC_PLACEHOLDER : QUESTION_PLACEHOLDER;
+            document.getElementById('targetRow').classList.toggle('hidden', next !== 'topic');
+            document.getElementById('topicHint').classList.toggle('hidden', next !== 'topic');
+        }
 
         async function startScrape() {
             const url = document.getElementById('questionUrl').value.trim();
-            if (!url) return;
+            if (mode === 'question' && !url) return;
 
             document.getElementById('startBtn').disabled = true;
             document.getElementById('startBtn').textContent = 'Running...';
@@ -193,11 +247,16 @@
             document.getElementById('logArea').innerHTML = '';
             document.getElementById('statusArea').innerHTML = '';
 
+            const payload = { mode: mode, question_url: url };
+            if (mode === 'topic') {
+                payload.target = parseInt(document.getElementById('targetCount').value, 10) || 2000;
+            }
+
             try {
                 const resp = await fetch('/api/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question_url: url })
+                    body: JSON.stringify(payload)
                 });
                 const data = await resp.json();
                 if (data.error) { showError(data.error); return; }
@@ -215,6 +274,7 @@
             eventSource.addEventListener('phase', e => updatePhase(JSON.parse(e.data)));
             eventSource.addEventListener('login_status', e => updateLoginStatus(JSON.parse(e.data)));
             eventSource.addEventListener('fetch_progress', e => updateFetchProgress(JSON.parse(e.data)));
+            eventSource.addEventListener('log', e => addLog(JSON.parse(e.data).message));
             eventSource.addEventListener('done', e => showDone(JSON.parse(e.data)));
             eventSource.addEventListener('error', e => {
                 try { showError(JSON.parse(e.data).message); } catch (_) {}
@@ -250,10 +310,15 @@
         }
 
         function updateFetchProgress(data) {
-            document.getElementById('fetchCount').textContent = data.current + ' answers';
+            const total = data.total ? ' / ' + data.total : '';
+            document.getElementById('fetchCount').textContent = data.current + total;
             document.getElementById('fetchSection').classList.remove('hidden');
             document.getElementById('logArea').classList.remove('hidden');
-            addLog('Got ' + data.current + ' answers (latest: ' + data.author + ')');
+            if (data.total) {
+                document.getElementById('fetchBar').style.width =
+                    Math.min(100, (data.current / data.total) * 100) + '%';
+            }
+            if (data.author) addLog('Got ' + data.current + ' answers (latest: ' + data.author + ')');
         }
 
         function showDone(data) {
@@ -262,9 +327,16 @@
             document.getElementById('startBtn').textContent = 'Start';
             document.getElementById('fetchBar').style.width = '100%';
             document.getElementById('resultCard').classList.remove('hidden');
-            document.getElementById('resultContent').innerHTML =
+            let html =
                 '<div class="result-row"><span class="label">Total answers</span><span class="value">' + data.total + '</span></div>' +
                 '<div class="result-row"><span class="label">Saved to</span><span class="value" style="font-size:12px;">' + data.json_path + '</span></div>';
+            if (typeof data.core_missing_rate === 'number') {
+                const ok = data.core_missing_rate <= 0.05;
+                html += '<div class="result-row"><span class="label">Core field missing rate</span>' +
+                        '<span class="value" style="color:' + (ok ? '#00a854' : '#f5222d') + '">' +
+                        (data.core_missing_rate * 100).toFixed(2) + '%</span></div>';
+            }
+            document.getElementById('resultContent').innerHTML = html;
             addLog('[DONE] ' + data.message);
             eventSource.close();
         }

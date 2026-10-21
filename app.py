@@ -19,6 +19,8 @@ import requests
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
+import topic_scraper
+
 
 def _get_base_path():
     """Get the base path for bundled exe or script"""
@@ -48,6 +50,9 @@ PASSWORD = "hzy170510"
 COOKIES_FILE = "zhihu_cookies.json"
 OUTPUT_DIR = str(Path.home() / "Documents" / "ZhihuAnswers")
 CUTOFF_TIMESTAMP = int(datetime(2024, 1, 1).timestamp())
+DEFAULT_TOPIC_ID = "19553148"   # 中医
+DEFAULT_TARGET = 2000           # 话题模式默认抓取条数
+MAX_TARGET = 20000
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -341,6 +346,57 @@ def run_scrape(task_id, question_id):
         threading.Thread(target=cleanup, daemon=True).start()
 
 
+# ==================== Topic Scrape ====================
+def extract_topic_id(url_or_id):
+    """Extract topic ID from URL or raw ID string"""
+    match = re.search(r"topic/(\d+)", str(url_or_id))
+    if match:
+        return match.group(1)
+    return str(url_or_id).strip().strip("/")
+
+
+def run_topic_scrape(task_id, topic_id, target):
+    """Topic top-answers scraping, runs in a background thread"""
+    def progress(message):
+        m = re.search(r"(?:已获取|补齐)\s+(\d+)\s*/\s*(\d+)", message)
+        if m:
+            emit_progress(task_id, "fetch_progress", {
+                "total": int(m.group(2)),
+                "current": int(m.group(1)),
+            })
+        emit_progress(task_id, "log", {"message": message})
+
+    try:
+        emit_progress(task_id, "phase", {
+            "phase": "login",
+            "message": "Checking login and API signature..."
+        })
+
+        csv_path, rows, report = topic_scraper.scrape_topic_tree(
+            topic_id=topic_id,
+            target=target,
+            progress=progress,
+        )
+
+        core_rate = report.get("核心字段最大缺失率", 0)
+        emit_progress(task_id, "done", {
+            "total": report.get("总条数", len(rows)),
+            "json_path": csv_path,
+            "message": f"Done! {report.get('总条数', len(rows))} answers saved. "
+                       f"Core field missing rate: {core_rate * 100:.2f}%",
+            "core_missing_rate": core_rate,
+            "qualifies": report.get("核心字段缺失率达标(<=5%)", False),
+        })
+
+    except Exception as e:
+        emit_progress(task_id, "error", {"message": str(e)})
+    finally:
+        def cleanup():
+            time.sleep(5)
+            progress_queues.pop(task_id, None)
+        threading.Thread(target=cleanup, daemon=True).start()
+
+
 # ==================== Flask Routes ====================
 @app.route("/")
 def index():
@@ -358,19 +414,35 @@ def check_login():
 
 @app.route("/api/start", methods=["POST"])
 def start_scrape():
-    data = request.get_json()
-    question_url = data.get("question_url", "").strip()
-    if not question_url:
-        return jsonify({"error": "Please provide a question URL or ID"}), 400
-
-    question_id = extract_question_id(question_url)
+    data = request.get_json() or {}
+    mode = (data.get("mode") or "question").strip()
+    user_input = (data.get("question_url") or "").strip()
     task_id = f"task_{int(time.time() * 1000)}"
     progress_queues[task_id] = queue.Queue()
 
+    # 话题模式：抓取话题下的精选回答并导出 CSV
+    if mode == "topic":
+        topic_id = extract_topic_id(user_input or DEFAULT_TOPIC_ID)
+        try:
+            target = int(data.get("target") or DEFAULT_TARGET)
+        except (TypeError, ValueError):
+            target = DEFAULT_TARGET
+        target = max(1, min(target, MAX_TARGET))
+
+        thread = threading.Thread(
+            target=run_topic_scrape, args=(task_id, topic_id, target), daemon=True)
+        thread.start()
+        return jsonify({"task_id": task_id, "topic_id": topic_id, "target": target, "mode": "topic"})
+
+    if not user_input:
+        progress_queues.pop(task_id, None)
+        return jsonify({"error": "Please provide a question URL or ID"}), 400
+
+    question_id = extract_question_id(user_input)
     thread = threading.Thread(target=run_scrape, args=(task_id, question_id), daemon=True)
     thread.start()
 
-    return jsonify({"task_id": task_id, "question_id": question_id})
+    return jsonify({"task_id": task_id, "question_id": question_id, "mode": "question"})
 
 
 @app.route("/api/progress/<task_id>")
